@@ -276,58 +276,83 @@ UIImage *ApolloEmojiSettingsIcon(NSString *emoji, UIColor *backgroundColor, CGFl
     }];
 }
 
-static NSString *ApolloBuyMeACoffeeIconPath(void) {
+static NSString *ApolloBundledResourcePNGPath(NSString *resourceName) {
+    return ApolloBundledResourcePath(resourceName, @"png");
+}
+
+NSString *ApolloBundledResourcePath(NSString *baseName, NSString *extension) {
+    if (baseName.length == 0) return nil;
+
     NSBundle *mainBundle = [NSBundle mainBundle];
-    NSString *bundledPath = [mainBundle pathForResource:@"buymeacoffee-icon"
-                                                 ofType:@"png"
-                                            inDirectory:@"ApolloRebornResources"];
-    if (bundledPath.length > 0 && [[NSFileManager defaultManager] fileExistsAtPath:bundledPath]) {
-        return bundledPath;
+    NSFileManager *fileManager = [NSFileManager defaultManager];
+
+    // inject-deb-local.sh: loose files in <App>.app/ApolloRebornResources/
+    NSString *path = [mainBundle pathForResource:baseName
+                                          ofType:extension
+                                     inDirectory:@"ApolloRebornResources"];
+    if (path.length > 0 && [fileManager fileExistsAtPath:path]) {
+        return path;
     }
 
-    bundledPath = [mainBundle pathForResource:@"buymeacoffee-icon" ofType:@"png"];
-    if (bundledPath.length > 0 && [[NSFileManager defaultManager] fileExistsAtPath:bundledPath]) {
-        return bundledPath;
+    // cyan / azule / Sideloadly deb fuse: <App>.app/ApolloReborn.bundle/
+    NSString *innerBundlePath = [mainBundle.bundlePath stringByAppendingPathComponent:@"ApolloReborn.bundle"];
+    NSBundle *innerBundle = [NSBundle bundleWithPath:innerBundlePath];
+    path = [innerBundle pathForResource:baseName ofType:extension];
+    if (path.length > 0 && [fileManager fileExistsAtPath:path]) {
+        return path;
     }
 
+    // Loose at .app root
+    path = [mainBundle pathForResource:baseName ofType:extension];
+    if (path.length > 0 && [fileManager fileExistsAtPath:path]) {
+        return path;
+    }
+
+    // Jailbreak (rootful + rootless)
     NSArray<NSString *> *bundleRoots = @[
         @"/Library/Application Support/ApolloReborn/ApolloReborn.bundle",
         @"/var/jb/Library/Application Support/ApolloReborn/ApolloReborn.bundle",
     ];
     for (NSString *root in bundleRoots) {
         NSBundle *resourceBundle = [NSBundle bundleWithPath:root];
-        NSString *path = [resourceBundle pathForResource:@"buymeacoffee-icon" ofType:@"png"];
-        if (path.length > 0 && [[NSFileManager defaultManager] fileExistsAtPath:path]) return path;
+        path = [resourceBundle pathForResource:baseName ofType:extension];
+        if (path.length > 0 && [fileManager fileExistsAtPath:path]) return path;
     }
 
+    NSString *fileName = extension.length > 0
+        ? [baseName stringByAppendingPathExtension:extension]
+        : baseName;
     NSArray<NSString *> *supportRoots = @[
         @"/Library/Application Support/ApolloReborn",
         @"/var/jb/Library/Application Support/ApolloReborn",
     ];
     for (NSString *root in supportRoots) {
-        NSString *path = [root stringByAppendingPathComponent:@"buymeacoffee-icon.png"];
-        if ([[NSFileManager defaultManager] fileExistsAtPath:path]) return path;
+        path = [root stringByAppendingPathComponent:fileName];
+        if ([fileManager fileExistsAtPath:path]) return path;
     }
     return nil;
 }
 
-static UIImage *ApolloBuyMeACoffeeSourceImage(void) {
-    static UIImage *sourceImage = nil;
+static UIImage *ApolloCachedBundledPNGNamed(NSString *resourceName) {
+    static NSMutableDictionary<NSString *, UIImage *> *cache = nil;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        NSString *path = ApolloBuyMeACoffeeIconPath();
-        if (path.length > 0) {
-            sourceImage = [UIImage imageWithContentsOfFile:path];
-        }
+        cache = [NSMutableDictionary dictionary];
     });
-    return sourceImage;
+
+    UIImage *cached = cache[resourceName];
+    if (cached) return cached;
+
+    NSString *path = ApolloBundledResourcePNGPath(resourceName);
+    if (path.length == 0) return nil;
+
+    UIImage *image = [UIImage imageWithContentsOfFile:path];
+    if (image) cache[resourceName] = image;
+    return image;
 }
 
-UIImage *ApolloBuyMeACoffeeSettingsIcon(CGFloat size) {
-    UIImage *source = ApolloBuyMeACoffeeSourceImage();
-    if (!source) {
-        return ApolloEmojiSettingsIcon(@"☕️", [UIColor colorWithRed:0.98 green:0.74 blue:0.02 alpha:1.0], size > 0.0 ? size : 29.0);
-    }
+static UIImage *ApolloRoundedPNGSettingsIcon(UIImage *source, CGFloat size) {
+    if (!source) return nil;
     if (size <= 0.0) size = 29.0;
 
     CGFloat cornerRadius = MIN(6.0, size * 0.21);
@@ -339,6 +364,16 @@ UIImage *ApolloBuyMeACoffeeSettingsIcon(CGFloat size) {
         [[UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, size, size) cornerRadius:cornerRadius] addClip];
         [source drawInRect:CGRectMake(0, 0, size, size)];
     }];
+}
+
+UIImage *ApolloBuyMeACoffeeSettingsIcon(CGFloat size) {
+    UIImage *icon = ApolloRoundedPNGSettingsIcon(ApolloCachedBundledPNGNamed(@"buymeacoffee-icon"), size);
+    if (icon) return icon;
+    return ApolloEmojiSettingsIcon(@"☕️", [UIColor colorWithRed:0.98 green:0.74 blue:0.02 alpha:1.0], size > 0.0 ? size : 29.0);
+}
+
+UIImage *ApolloRebornOptionsSettingsIcon(CGFloat size) {
+    return ApolloRoundedPNGSettingsIcon(ApolloCachedBundledPNGNamed(@"apollo-reborn-options-icon"), size);
 }
 
 #pragma mark - In-app browser
