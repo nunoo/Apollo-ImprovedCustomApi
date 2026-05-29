@@ -20,6 +20,7 @@ static const void *kApolloDeletedCommentsFadeTimerKey = &kApolloDeletedCommentsF
 static const void *kApolloDeletedCommentsFadeStartDateKey = &kApolloDeletedCommentsFadeStartDateKey;
 static const void *kApolloDeletedCommentsFadeAccentKey = &kApolloDeletedCommentsFadeAccentKey;
 static const void *kApolloDeletedCommentsFadeProseKey = &kApolloDeletedCommentsFadeProseKey;
+static const void *kApolloDeletedCommentsChipMarkerKey = &kApolloDeletedCommentsChipMarkerKey;
 
 static NSString *const ApolloDeletedCommentsTapPlaceholderText = @"SHOW";
 static NSString *const ApolloDeletedCommentsRevealURLString = @"apollo-deleted-comments://reveal";
@@ -1028,6 +1029,9 @@ static NSAttributedString *ApolloDeletedCommentsStyleRecoveredSpoilerChip(id tex
 
     // Stash the chip + look up the prose body so the tap handler can swap.
     objc_setAssociatedObject(textNode, kApolloDeletedCommentsChipAttributedTextKey, [out copy], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    // Mark so a subsequent Apollo native spoiler-reveal on this node can be
+    // intercepted in our setAttributedText: hook and styled with our mint fade.
+    objc_setAssociatedObject(textNode, kApolloDeletedCommentsChipMarkerKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     id cellNode = ApolloDeletedCommentsCommentCellNodeForTextNode(textNode);
     RDKComment *comment = ApolloDeletedCommentsCommentFromCellNode(cellNode);
     NSString *fullName = ApolloDeletedCommentsFullNameForComment(comment);
@@ -1061,14 +1065,88 @@ static NSAttributedString *ApolloDeletedCommentsRenameRecoveredSpoilerLabel(id t
     return ApolloDeletedCommentsStyleRecoveredSpoilerChip(textNode, attributedText);
 }
 
+// Marker: set whenever we render a recovered SHOW chip onto a textNode so
+// that a subsequent setAttributedText: (Apollo's native spoiler-reveal)
+// can be recognized and styled with our mint fade instead of Apollo's grey.
+// (Key declaration lives at top of file with other association keys.)
+
+// Strip every grey-ish NSBackgroundColorAttributeName run from an attributed
+// string. Returns nil if no change was needed so callers can skip the rewrite.
+static NSAttributedString *ApolloDeletedCommentsStripSpoilerGreyBackground(NSAttributedString *attributedText) {
+    if (![attributedText isKindOfClass:[NSAttributedString class]] || attributedText.length == 0) return nil;
+    __block BOOL anyChange = NO;
+    NSMutableAttributedString *out = [attributedText mutableCopy];
+    NSRange fullRange = NSMakeRange(0, out.length);
+    [out enumerateAttribute:NSBackgroundColorAttributeName inRange:fullRange options:0 usingBlock:^(id value, NSRange range, BOOL *stop) {
+        UIColor *bg = [value isKindOfClass:[UIColor class]] ? (UIColor *)value : nil;
+        if (bg && ApolloDeletedCommentsIsLikelySpoilerFillColor(bg)) {
+            [out removeAttribute:NSBackgroundColorAttributeName range:range];
+            anyChange = YES;
+        }
+    }];
+    return anyChange ? out : nil;
+}
+
+// Detect a revealed-spoiler attributedText: longer than the chip placeholder
+// and contains at least one near-grey NSBackgroundColorAttributeName run.
+static BOOL ApolloDeletedCommentsAttributedTextLooksLikeRevealedSpoiler(NSAttributedString *attributedText) {
+    if (![attributedText isKindOfClass:[NSAttributedString class]]) return NO;
+    if (attributedText.length < 8) return NO; // chip is " SHOW " = 6 chars
+    __block BOOL hasGreyBG = NO;
+    [attributedText enumerateAttribute:NSBackgroundColorAttributeName
+                               inRange:NSMakeRange(0, attributedText.length)
+                               options:0
+                            usingBlock:^(id value, NSRange range, BOOL *stop) {
+        UIColor *bg = [value isKindOfClass:[UIColor class]] ? (UIColor *)value : nil;
+        if (bg && ApolloDeletedCommentsIsLikelySpoilerFillColor(bg)) {
+            hasGreyBG = YES;
+            *stop = YES;
+        }
+    }];
+    return hasGreyBG;
+}
+
 %hook ASTextNode
 
 - (void)setAttributedText:(NSAttributedString *)attributedText {
+    NSAttributedString *workingText = attributedText;
+    BOOL shouldStartFade = NO;
+
+    // If this textNode previously displayed a recovered SHOW chip and Apollo
+    // is now setting longer text with a grey background (i.e. native spoiler
+    // reveal), strip the grey and queue our mint fade animation.
+    if (objc_getAssociatedObject((id)self, kApolloDeletedCommentsChipMarkerKey) &&
+        ApolloDeletedCommentsAttributedTextLooksLikeRevealedSpoiler(attributedText)) {
+        NSAttributedString *cleaned = ApolloDeletedCommentsStripSpoilerGreyBackground(attributedText);
+        if (cleaned) {
+            workingText = cleaned;
+        }
+        objc_setAssociatedObject((id)self, kApolloDeletedCommentsChipMarkerKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        shouldStartFade = YES;
+        ApolloLog(@"[deleted-comments] intercepted Apollo spoiler reveal length=%lu stripped=%d", (unsigned long)attributedText.length, cleaned != nil);
+    }
+
     NSAttributedString *styledAttributedText = ApolloDeletedCommentsStyledFlairText(
-        ApolloDeletedCommentsRenameRecoveredSpoilerLabel((id)self, attributedText)
+        ApolloDeletedCommentsRenameRecoveredSpoilerLabel((id)self, workingText)
     );
+
+    // Mark the chip so we can recognize the subsequent reveal.
+    NSString *trimmed = ApolloDeletedCommentsTrimmedString(styledAttributedText.string);
+    if ([trimmed isEqualToString:@"SHOW"]) {
+        objc_setAssociatedObject((id)self, kApolloDeletedCommentsChipMarkerKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+
     %orig(styledAttributedText);
     ApolloDeletedCommentsApplyFlairContainerStyle((id)self, styledAttributedText);
+
+    if (shouldStartFade) {
+        UIColor *accent = ApolloDeletedCommentsThemeAccentFromTextNode((id)self);
+        // Defer one runloop so the new text has laid out and the view has
+        // its updated bounds before we paint the highlight layer.
+        dispatch_async(dispatch_get_main_queue(), ^{
+            ApolloDeletedCommentsStartRevealFade((id)self, accent);
+        });
+    }
 }
 
 - (void)didEnterDisplayState {
