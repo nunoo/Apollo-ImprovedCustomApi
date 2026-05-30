@@ -29,6 +29,7 @@ static BOOL ApolloDeletedCommentsIsRecoveredFlairText(NSAttributedString *attrib
     NSString *lower = [text lowercaseString];
     return [lower isEqualToString:@"deleted"] ||
            [lower isEqualToString:@"user deleted"] ||
+           [lower isEqualToString:@"deleted by user"] ||
            [lower isEqualToString:@"removed by mod"];
 }
 

@@ -404,7 +404,7 @@ static NSString *ApolloDeletedCommentsReasonForArchived(NSDictionary *archived) 
 }
 
 static NSString *ApolloDeletedCommentsBadgeLabelForReason(NSString *reason) {
-    if ([reason isEqualToString:ApolloDeletedCommentsReasonUserDeleted]) return @"user deleted";
+    if ([reason isEqualToString:ApolloDeletedCommentsReasonUserDeleted]) return @"deleted by user";
     return @"removed by mod";
 }
 
